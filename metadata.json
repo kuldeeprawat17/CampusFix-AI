@@ -1,0 +1,6 @@
+{
+  "name": "CampusFix AI",
+  "description": "Smart campus maintenance platform enabling students to report infrastructure issues and staff to track, prioritize, and resolve them with AI-assisted triage.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

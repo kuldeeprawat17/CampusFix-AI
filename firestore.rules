@@ -1,0 +1,117 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        (request.auth.token.email == "kdeepsingh.rawat@gmail.com" && request.auth.token.email_verified == true) ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isValidCategory(cat) {
+      return cat in ['electrical', 'hvac_fan', 'av_projector', 'plumbing', 'internet_wifi', 'furniture', 'civil_structural', 'other'];
+    }
+
+    function isValidPriority(p) {
+      return p in ['low', 'medium', 'high', 'emergency'];
+    }
+
+    function isValidStatus(s) {
+      return s in ['Reported', 'In Progress', 'Resolved'];
+    }
+
+    function isValidTicket(data) {
+      return data.id is string && data.id.size() >= 3 && data.id.size() <= 64
+        && data.title is string && data.title.size() >= 3 && data.title.size() <= 150
+        && data.description is string && data.description.size() >= 5 && data.description.size() <= 2000
+        && data.building is string && data.building.size() >= 1 && data.building.size() <= 100
+        && data.roomNumber is string && data.roomNumber.size() >= 1 && data.roomNumber.size() <= 50
+        && isValidCategory(data.category)
+        && isValidPriority(data.priority)
+        && isValidStatus(data.status)
+        && data.authorId is string && data.authorId == request.auth.uid
+        && data.authorEmail is string && data.authorEmail.size() <= 120
+        && data.authorName is string && data.authorName.size() <= 100
+        && (data.isRuleBasedTriage == null || data.isRuleBasedTriage is bool)
+        && (data.aiTriageNotes == null || (data.aiTriageNotes is string && data.aiTriageNotes.size() <= 500))
+        && (data.assignedTo == null || (data.assignedTo is string && data.assignedTo.size() <= 100))
+        && (data.resolutionNotes == null || (data.resolutionNotes is string && data.resolutionNotes.size() <= 1000))
+        && (data.estimatedFixHours == null || data.estimatedFixHours is number);
+    }
+
+    // Tickets collection rules
+    match /tickets/{ticketId} {
+      // Transparency: authenticated campus users can read tickets to avoid duplicates and track status
+      allow read: if isSignedIn();
+
+      // Create rule
+      allow create: if isSignedIn()
+        && isValidId(ticketId)
+        && isValidTicket(incoming())
+        && incoming().status == 'Reported'
+        && incoming().authorId == request.auth.uid
+        && incoming().keys().hasAll([
+          'id', 'title', 'description', 'building', 'roomNumber',
+          'category', 'priority', 'status', 'authorId', 'authorEmail',
+          'authorName', 'createdAt', 'updatedAt'
+        ])
+        && incoming().keys().hasOnly([
+          'id', 'title', 'description', 'building', 'roomNumber',
+          'category', 'priority', 'status', 'authorId', 'authorEmail',
+          'authorName', 'createdAt', 'updatedAt', 'isRuleBasedTriage',
+          'aiTriageNotes', 'assignedTo', 'resolutionNotes', 'estimatedFixHours'
+        ]);
+
+      // Update rule
+      allow update: if isSignedIn()
+        && isValidId(ticketId)
+        && incoming().id == existing().id
+        && incoming().authorId == existing().authorId
+        && incoming().createdAt == existing().createdAt
+        && (
+          // Admin can triage, assign, and update status
+          isAdmin() ||
+          // Reporter can update description or details while still in 'Reported' stage
+          (
+            existing().authorId == request.auth.uid
+            && existing().status == 'Reported'
+            && incoming().status == 'Reported'
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'title', 'description', 'building', 'roomNumber', 'updatedAt'
+            ])
+          )
+        );
+
+      // Only admin can delete spam or invalid tickets
+      allow delete: if isAdmin() && isValidId(ticketId);
+    }
+
+    // Admins collection rules
+    match /admins/{adminId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin() && isValidId(adminId);
+    }
+  }
+}
